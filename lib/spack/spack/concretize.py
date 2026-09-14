@@ -76,6 +76,30 @@ def _solver(*, factory: Optional["SpecFiltersFactory"] = None) -> "Solver":
     return Solver(context=spack.context.default(), specs_factory=factory)
 
 
+def validate_package_names(specs: Sequence[Spec]) -> None:
+    """Raise for a spec that names a package which is not in the repository.
+
+    The solver rejects these too, after it has read the installation database and the
+    configuration. Here the name is checked against a directory listing.
+
+    Args:
+        specs: specs whose nodes are checked, dependencies included
+    """
+    for root in specs:
+        for node in root.traverse():
+            if not node.name:
+                continue
+            # raises UnknownNamespaceError for a namespace that is not configured
+            repo = spack.repo.PATH.repo_for_pkg(node)
+            # exists() is a directory listing, is_virtual() reads the provider index, so a name
+            # with a package.py never reaches the index
+            if repo.exists(node.name) or spack.repo.PATH.is_virtual(node.name):
+                continue
+            raise spack.repo.UnknownPackageError(
+                node.name, namespace=node.namespace, repo_root=repo.root
+            )
+
+
 def _concretize_specs_together(
     abstract_specs: Sequence[Spec],
     *,
@@ -90,6 +114,7 @@ def _concretize_specs_together(
             will have test dependencies. If False, test dependencies will be disregarded.
         factory: optional factory to produce a list of specs to be reused
     """
+    validate_package_names(abstract_specs)
     allow_deprecated = spack.config.CONFIG.get("config:deprecated", False)
     result = _solver(factory=factory).solve(
         abstract_specs, tests=tests, allow_deprecated=allow_deprecated
@@ -155,6 +180,7 @@ def _concretize_together_when_possible(
     """
 
     to_concretize = [concrete if concrete else abstract for abstract, concrete in spec_list]
+    validate_package_names(to_concretize)
     old_concrete_to_abstract = {
         concrete: abstract for (abstract, concrete) in spec_list if concrete
     }
@@ -213,6 +239,9 @@ def _concretize_separately(
     )
 
     to_concretize = [abstract for abstract, concrete in spec_list if not concrete]
+    # in the parent: a worker reports an error as a string, so its type reaches main() as
+    # RuntimeError
+    validate_package_names(to_concretize)
     args = [
         (i, str(abstract), tests, factory)
         for i, abstract in enumerate(to_concretize)
@@ -330,6 +359,8 @@ def _solve_one(spec: Spec, *, tests: TestsType, factory: Optional["SpecFiltersFa
             raise spack.error.SpecError(
                 f"Spec {node} has no name; cannot concretize an anonymous spec"
             )
+
+    validate_package_names([spec])
 
     allow_deprecated = spack.config.CONFIG.get("config:deprecated", False)
     result = _solver(factory=factory).solve([spec], tests=tests, allow_deprecated=allow_deprecated)
