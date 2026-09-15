@@ -82,6 +82,14 @@ def find_compilers(
     new_compilers = spack.detection.update_configuration(
         detected_packages, buildable=True, scope=scope
     )
+    if new_compilers and spack.platforms.using_libc_compatibility():
+        # Local import to break circular dependencies
+        from spack.externals_config import attach_libc_dependencies
+
+        scope = scope or spack.config.CONFIG.default_modify_scope()
+        packages_yaml = spack.config.CONFIG.get("packages", scope=scope)
+        attach_libc_dependencies(packages_yaml, repo=spack.repo.PATH)
+        spack.config.CONFIG.set("packages", packages_yaml, scope=scope)
     return new_compilers
 
 
@@ -278,11 +286,17 @@ class CompilerFactory:
         repo: spack.repo.RepoPath,
     ) -> List[spack.spec.Spec]:
         """Returns the compiler specs defined in the "packages" section of the configuration"""
-        compiler_package_names = supported_compilers(repo=repo)
         packages_yaml = configuration.deepcopy_as_builtin("packages", scope=scope)
-
         init_external_dicts = extract_dicts_from_configuration(packages_yaml)
         external_parser = ExternalSpecsParser(init_external_dicts, repo=repo)
+        return CompilerFactory.from_external_parser(external_parser, repo=repo)
+
+    @staticmethod
+    def from_external_parser(
+        external_parser: ExternalSpecsParser, *, repo: spack.repo.RepoPath
+    ) -> List[spack.spec.Spec]:
+        """Returns the compiler specs among the externals of a parser"""
+        compiler_package_names = supported_compilers(repo=repo)
         valid_compiler_specs = []
         for name, external_specs_and_config in external_parser.specs_by_name.items():
             if name not in compiler_package_names:
